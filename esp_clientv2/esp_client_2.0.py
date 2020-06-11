@@ -34,9 +34,15 @@ class Client:
     """
 
     def bitstring_to_bytes(self, s):
+        """""
+        Converts string of bits into byte and returns that byte
+        """""
         return int(s, 2).to_bytes(len(s) // 8, byteorder='big')
 
     def format_header(self, id, operation, response):
+        """""
+        connects bytes of header into single bytearray and returns it
+        """""
         next_msg_size = '000000000'
         header = self.bitstring_to_bytes(VERSION + operation)
         header += self.bitstring_to_bytes(id)
@@ -45,6 +51,9 @@ class Client:
         return header
 
     def msg_size_tobitstring(self, size):
+        """""
+                Converts string of bits into byte and returns that byte
+                """""
         size = str(format(size, 'b'))
         for x in range(10 - len(size)):
             size = '0' + size
@@ -97,6 +106,10 @@ class Client:
                     return -1
 
     def send_message(self, header: bytes, message: bytes):
+        it = 500 - len(header+message)
+        for x in range(it):
+            message = message + b'\x01'
+
         self.s.sendall(header + message)
 
     def interpret_header(self, header, expected_op):
@@ -168,8 +181,11 @@ class Client:
         message = message.encode('utf-8')
         if self.init_connection() == 0:
             header = self.format_header(self.ID, OP_LOGIN, RESPONSE)
+            print(message)
             self.send_message(header, message)
             response = self.recv_response_header()
+            if response == -1:
+                return -1
             response = self.interpret_header(response, OP_LOGIN)
             if response == -1:
                 return -1
