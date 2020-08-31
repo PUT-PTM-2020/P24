@@ -9,8 +9,10 @@
 #include "lwip/pbuf.h"
 #include "lwip/udp.h"
 #include "lwip/tcp.h"
-#include "file_processing.h"
 #include "ff.h"
+
+#include <stdlib.h>
+#include <string.h>
 
 #define UDP_SERVER_PORT		20000
 #define UDP_CLIENT_PORT		20000
@@ -21,9 +23,14 @@
 #define GET_FILE_INFO 		'\x05'
 #define CHANGE_DIRECTORY 	'\x06'
 #define DELETE_FILE			'\x07'
+#define DELETE_DIRECTORY	'\x08'
+#define GET_FILE			'\x09'
+#define CREATE_DIRECTORY 	'\b'
 
 #define RESP_OK				'\x00'
 #define RESP_ERR			'\x01'
+#define RESP_MORE			'\x02'
+
 char msg_buffer[1024];
 char ans[1];
 char operation[1];
@@ -47,8 +54,11 @@ uint16_t find_end_of_msg();
 void get_path_info();
 void save_to_file(uint16_t append);
 void parse_path_and_delete_file();
+void parse_path_and_delete_directory();
+void read_and_send_file();
+void parse_path_and_create_directory();
 
-uint16_t read_file(char* filename);
+uint16_t read_file(char* filename, int p_counter);
 uint16_t write_file(char* filename, uint16_t append);
 uint16_t find_size(TCHAR * fname);
 uint16_t scan_dir(char* path);
@@ -135,6 +145,18 @@ void process_data()
 	else if(operation[0] - DELETE_FILE == 0)
 	{
 		parse_path_and_delete_file();
+	}
+	else if(operation[0] - DELETE_DIRECTORY == 0)
+	{
+		parse_path_and_delete_directory();
+	}
+	else if(operation[0] - GET_FILE == 0)
+	{
+		read_and_send_file();
+	}
+	else if(operation[0] - CREATE_DIRECTORY == 0)
+	{
+		parse_path_and_create_directory();
 	}
 	else
 	{
@@ -231,17 +253,92 @@ void parse_path_and_delete_file()
 	memcpy(msg_buffer+2, id, 1);
 }
 
+void parse_path_and_delete_directory()
+{
+	uint16_t it = find_end_of_msg();
+	char filename[100];
+	memset(filename, 0, sizeof(filename));
+	memcpy(filename, msg_buffer + 3, it);
+	memset(msg_buffer, 0, sizeof(msg_buffer));
+	FRESULT fres = delete_file(filename);
+	memcpy(msg_buffer, operation, 1);
+	if (fres == FR_OK)
+	{
+		memcpy(msg_buffer+1, RESP_OK, 1);
+	}
+	else
+	{
+		memcpy(msg_buffer+1, RESP_ERR, 1);
+	}
+	memcpy(msg_buffer+2, id, 1);
+}
+
+void read_and_send_file()
+{
+	FRESULT fres;
+	uint16_t it = find_end_of_msg();
+	char filename[100];
+	memset(filename,0, sizeof(filename));
+	memcpy(filename, msg_buffer + 3, it);
+	char packet_counter[1] = {'\0'};
+	memcpy(packet_counter, msg_buffer + it + 4, 1);
+	int p_counter = 0;
+	p_counter = packet_counter[0];
+	memset(msg_buffer, 0, sizeof(msg_buffer));
+	fres = read_file(filename, p_counter);
+	if (fres == FR_OK)
+		{
+		if(bytes_read == 512)
+		{
+			memcpy(msg_buffer+1, RESP_OK, 1);
+		}
+		else if(bytes_read < 512)
+		{
+			memcpy(msg_buffer+1, RESP_OK, 1);
+		}
+		}
+		else
+		{
+			memcpy(msg_buffer+1, RESP_ERR, 1);
+		}
+		memcpy(msg_buffer+2, id, 1);
+		memcpy(msg_buffer+3, file_buffer, 512);
+		memset(file_buffer, 0, sizeof(file_buffer));
+}
+
+void parse_path_and_create_directory()
+{
+	uint16_t it = find_end_of_msg();
+		char dirname[100];
+		memset(dirname, 0, sizeof(dirname));
+		memcpy(dirname, msg_buffer + 3, it);
+		memset(msg_buffer, 0, sizeof(msg_buffer));
+		FRESULT fres = create_directory(dirname);
+		memcpy(msg_buffer, operation, 1);
+		if (fres == FR_OK)
+		{
+			memcpy(msg_buffer+1, RESP_OK, 1);
+		}
+		else
+		{
+			memcpy(msg_buffer+1, RESP_ERR, 1);
+		}
+		memcpy(msg_buffer+2, id, 1);
+}
 
 
 
 
-uint16_t read_file(char* filename)
+uint16_t read_file(char* filename, int p_counter)
 {
 	FRESULT fr;
 	fr = f_mount(&FatFs, "", 0);
-	fr = f_open(&file, filename, FA_READ | FA_OPEN_ALWAYS);
+	fr = f_open(&file, filename, FA_READ);
 	if (fr) return (int)fr;
-	fr = f_read(&file, file_buffer,sizeof(file_buffer),&bytes_read);
+	for (int i=0; i<p_counter; i++)
+	{
+		fr = f_read(&file, file_buffer,512,&bytes_read);
+	}
 	fr = f_close(&file);
 	return fr;
 }
@@ -326,7 +423,8 @@ uint16_t delete_directory(char * path)
 	static FRESULT fr;
 	if (fr != FR_OK) return 1;
 	fr = f_unlink(path);
-	if (fr == FR_OK) return 0;
+	return fr;
+	/*
 	else if (fr == FR_DENIED)
 	{
 		DIR dir;
@@ -346,6 +444,7 @@ uint16_t delete_directory(char * path)
 		fr = f_unlink(path);
 		return fr;
 	}
+	*/
 }
 
 uint16_t create_directory(char * path)
