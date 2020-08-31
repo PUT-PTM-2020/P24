@@ -8,7 +8,7 @@
 <img src="https://botland.com.pl/64737-thickbox_default/modul-czytnika-kart-sd.jpg" alt="Czytnik kart SD" height="150" width="200">Czytnik kart SD <br>
 <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn%3AANd9GcQrODIHC03dJQEg5tS9Idymq-e9rcGCxHMLznT6HVeXhJ5l8Ppxt1FAOoycvdq1aFbBsmcmbmc&usqp=CAc" alt="Moduł Wi-Fi" height="150" width="200"> Moduł Wi-Fi <br>
 
- ### Wykorzystano: FatFs
+ ### Wykorzystano: FatFs, lwIP
 
 ### Autorzy: <br>
 Mikołaj Adamski <br>
