@@ -1,0 +1,2 @@
+ffsystem.c:16:7:ff_memalloc	16	static
+ffsystem.c:28:6:ff_memfree	16	static
