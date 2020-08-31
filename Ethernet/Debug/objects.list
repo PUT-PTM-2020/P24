@@ -2,7 +2,6 @@
 "Core/Src/ff.o"
 "Core/Src/ffsystem.o"
 "Core/Src/ffunicode.o"
-"Core/Src/file_processing.o"
 "Core/Src/main.o"
 "Core/Src/stm32f4xx_hal_msp.o"
 "Core/Src/stm32f4xx_it.o"

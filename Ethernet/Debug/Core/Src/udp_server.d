@@ -57,7 +57,7 @@ Core/Src/udp_server.o: ../Core/Src/udp_server.c ../Core/Inc/main.h \
  ../Middlewares/Third_Party/LwIP/src/include/lwip/tcpbase.h \
  ../Middlewares/Third_Party/LwIP/src/include/lwip/icmp.h \
  ../Middlewares/Third_Party/LwIP/src/include/lwip/prot/icmp.h \
- ../Core/Inc/file_processing.h ../Core/Inc/ff.h ../Core/Inc/ffconf.h
+ ../Core/Inc/ff.h ../Core/Inc/ffconf.h
 
 ../Core/Inc/main.h:
 
@@ -176,8 +176,6 @@ Core/Src/udp_server.o: ../Core/Src/udp_server.c ../Core/Inc/main.h \
 ../Middlewares/Third_Party/LwIP/src/include/lwip/icmp.h:
 
 ../Middlewares/Third_Party/LwIP/src/include/lwip/prot/icmp.h:
-
-../Core/Inc/file_processing.h:
 
 ../Core/Inc/ff.h:
 
