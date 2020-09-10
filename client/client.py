@@ -12,7 +12,8 @@ CHANGE_DIRECTORY = '\x06'
 DELETE_FILE = '\x07'
 DELETE_DIRECTORY = '\x08'
 GET_FILE = '\x09'
-CREATE_DIRECTORY = '\x10'
+CREATE_DIRECTORY = '\x0a'
+END_SEND_FILE = '\x0b'
 
 RESP_OK = '\x00'
 RESP_ERR = '\x01'
@@ -24,8 +25,9 @@ class Client:
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind((socket.gethostbyname(socket.gethostname()),20000))
         self.SERVER_ADDRESS = ("192.168.1.78", 20000)
-        self.HEADER_SIZE = 3
+        self.HEADER_SIZE = 5
         self.USER = user
+        self.file_control = '\x00\x00'
         self.ID = '\x00'
         self.user_dir = os.getcwd() #+ "\\" + user
         self.remote_dir_path = '/'
@@ -42,12 +44,20 @@ class Client:
     def show_local_directory(self):
         print(os.getcwd())
 
-    def send_and_recv_packet(self, operation, data='', id='\x00', answer='\x00' ):
+    def send_and_recv_packet(self, operation, data='', id='\x00', answer='\x00',file_ctrl=b'\x00\x00'):
         it = 0
         recv_packet = None
+        try:
+            self.socket.settimeout(0.2)
+            packet, address = self.socket.recvfrom(1024)
+        except socket.timeout:
+            pass
+        finally:
+            packet = b'\x00'
         while recv_packet is None and it < 10:
             try:
-                packet = (operation + answer + id + data).encode('utf-8')
+                header = operation.encode('utf-8') + answer.encode('utf-8') + id.encode('utf-8') + file_ctrl
+                packet = header + data.encode('utf-8')
                 #print(packet)
                 self.socket.sendto(packet, self.SERVER_ADDRESS)
                 self.socket.settimeout(0.2)
@@ -66,15 +76,21 @@ class Client:
 
 
     def get_remote_fileinfo(self):
-        packet = self.send_and_recv_packet(GET_FILE_INFO, data=self.remote_dir_path).decode('utf-8')
-        if packet is '':
-            return
-        if packet[0] == GET_FILE_INFO and packet[1] == RESP_OK:
-            files = packet[3:].split(sep='*')
-            for file in files:
-                print(file)
-        if packet[1] != RESP_OK:
-            print("Server returned error")
+        try:
+            packet = self.send_and_recv_packet(GET_FILE_INFO, data=self.remote_dir_path)
+            data = packet[5:].decode('utf-8')
+            packet = packet[:3].decode('utf-8')
+            if packet is b'':
+                return
+            if packet[0] == GET_FILE_INFO and packet[1] == RESP_OK:
+                files = data.split(sep='*')
+                for file in files:
+                    print(file)
+            if packet[1] != RESP_OK:
+                print("Server returned error")
+        except UnicodeDecodeError:
+            print("Decode error")
+            print(packet)
 
 
     def change_local_directory(self, path):
@@ -104,7 +120,8 @@ class Client:
             else:
                 path = self.remote_dir_path + '/' + path
         packet = self.send_and_recv_packet(CHANGE_DIRECTORY, path)
-        packet = packet.decode('utf-8')
+        data = packet[5:].decode('utf-8')
+        packet = packet[:3].decode('utf-8')
         if packet[0] == CHANGE_DIRECTORY and packet[1] == RESP_OK:
             self.remote_dir_path = path
             print(self.remote_dir_path)
@@ -122,21 +139,28 @@ class Client:
                     path = self.remote_dir_path + '/' + filename
                 freebuffer = 512 - self.HEADER_SIZE - len(path) - 1
                 msg_buffer = file.read(freebuffer)
-                packet = self.send_and_recv_packet(START_SEND_FILE, path + '*' + msg_buffer).decode()
+                total_packets_recieved = b'\x00\x01'
+                packet = self.send_and_recv_packet(START_SEND_FILE,file_ctrl=total_packets_recieved , data=path + '*' + msg_buffer)
+                data = packet[5:].decode('utf-8')
+                packet = packet[:3].decode('utf-8')
                 if packet[0] == START_SEND_FILE and packet[1] == RESP_OK:
-                    pass
+                    total_packets_recieved = self.iterate_byte(total_packets_recieved)
                 else:
                     print("Error during upload...")
+                    return
                 msg_buffer = file.read(freebuffer)
                 while msg_buffer:
-                    packet = self.send_and_recv_packet(NEXT_SEND_FILE, path + "*" + msg_buffer).decode('utf-8')
+                    packet = self.send_and_recv_packet(NEXT_SEND_FILE,file_ctrl=total_packets_recieved , data=path + "*" + msg_buffer)
+                    data = packet[5:].decode('utf-8')
+                    packet = packet[:3].decode('utf-8')
                     if packet[0] == NEXT_SEND_FILE and packet[1] == RESP_OK:
-                        pass
+                        total_packets_recieved = self.iterate_byte(total_packets_recieved)
                     else:
                         print("Error during upload.")
-                        #delete file in dbase
                         break
                     msg_buffer = file.read(freebuffer)
+            packet = self.send_and_recv_packet(END_SEND_FILE)
+            packet = packet[:3].decode('utf-8')
             if packet[1] == RESP_OK:
                 print("File sent")
         except FileNotFoundError:
@@ -154,10 +178,35 @@ class Client:
                 path = self.remote_dir_path+filename
             else:
                 path = self.remote_dir_path + '/' + filename
-            total_packets_recieved = b'\x01'
-            packet = self.send_and_recv_packet(GET_FILE, path +"*"+ total_packets_recieved.decode('utf-8')).decode('utf-8')
-            if packet[1] == RESP_OK:
-                file.write(packet[3:])
+            total_packets_recieved = b'\x00\x01'
+            packet = self.send_and_recv_packet(GET_FILE, path, file_ctrl=total_packets_recieved)
+            data = packet[5:].decode('utf-8')
+
+            packet = packet[:3].decode('utf-8')
+            if packet[1] == RESP_MORE:
+                print(packet[5:])
+                file.write(data)
+                print(data, end='')
+                total_packets_recieved = self.iterate_byte(total_packets_recieved)
+                while(packet[1] == RESP_MORE):
+                    packet = self.send_and_recv_packet(GET_FILE, path, file_ctrl=total_packets_recieved)
+                    data = packet[5:].decode('utf-8')
+                    packet = packet[:3].decode('utf-8')
+                    if packet[1] == RESP_MORE:
+                        print(data, end='')
+                        file.write(data)
+                        total_packets_recieved = self.iterate_byte(total_packets_recieved)
+                    elif packet[1] == RESP_OK:
+                        file.write(data)
+                        print(data)
+                        print("\nFile received")
+                        break
+                    elif packet[1] == RESP_ERR:
+                        print("Error while downloading")
+            elif packet[1] == RESP_OK:
+                file.write(data)
+                print(data)
+
                 print("File received, no loop")
                 file.close()
                 return
@@ -166,23 +215,7 @@ class Client:
                 print("File does not exist")
                 file.close()
                 return
-            elif packet[1] == RESP_MORE:
-                print(packet[3:])
-                data = len(packet[3:])
-                file.write(packet[3:])
-                self.iterate_byte(total_packets_recieved)
-                while(packet[1] == RESP_MORE):
-                    packet = self.send_and_recv_packet(GET_FILE, path +"*"+ total_packets_recieved.decode('utf-8'))\
-                        .decode("utf-8")
-                    if packet[1] == RESP_MORE:
-                        file.write(packet[3:])
-                        self.iterate_byte(total_packets_recieved)
-                    elif packet[1] == RESP_OK:
-                        file.write(packet[3:])
-                        print("File received")
-                        break
-                    elif packet[1] == RESP_ERR:
-                        print("Error while downloading")
+
 
 
     def delete_file(self, filename):
@@ -191,7 +224,9 @@ class Client:
             path = self.remote_dir_path + filename
         else:
             path = self.remote_dir_path + '/' + filename
-        packet = self.send_and_recv_packet(DELETE_FILE, path).decode('utf-8')
+        packet = self.send_and_recv_packet(DELETE_FILE, path)
+        data = packet[5:].decode('utf-8')
+        packet = packet[:3].decode('utf-8')
         if packet[0] != DELETE_FILE or packet[1] == RESP_ERR:
             print("Network Error")
         else:
@@ -203,8 +238,10 @@ class Client:
             path = self.remote_dir_path + dirname
         else:
             path = self.remote_dir_path + '/' + dirname
-        packet = self.send_and_recv_packet(DELETE_DIRECTORY, path).decode('utf-8')
-        if packet[0] != DELETE_DIRECTORY or packet[1] == RESP_ERR:
+        packet = self.send_and_recv_packet(CREATE_DIRECTORY, path)
+        data = packet[5:].decode('utf-8')
+        packet = packet[:3].decode('utf-8')
+        if packet[0] != CREATE_DIRECTORY or packet[1] == RESP_ERR:
             print("Network Error")
         elif packet[1] == RESP_OK:
             print("Directory has been created.")
@@ -217,7 +254,9 @@ class Client:
             path = self.remote_dir_path + dirname
         else:
             path = self.remote_dir_path + '/' + dirname
-        packet = self.send_and_recv_packet(DELETE_DIRECTORY, path).decode('utf-8')
+        packet = self.send_and_recv_packet(DELETE_DIRECTORY, path)
+        data = packet[5:].decode('utf-8')
+        packet = packet[:3].decode('utf-8')
         if packet[0] != DELETE_DIRECTORY or packet[1] == RESP_ERR:
             print("Network Error")
         else:
@@ -229,7 +268,7 @@ class Client:
         val += 1
         if val == 255:
             val = 0
-        return val.to_bytes(1, 'big')
+        return val.to_bytes(2, 'big')
 
 
 
