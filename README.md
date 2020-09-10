@@ -4,9 +4,8 @@
 
 
 ### Użyte moduły: <br>
-<img src="https://www.waveshare.com/media/catalog/product/cache/1/image/800x800/9df78eab33525d08d6e5fb8d27136e95/1/_/1.8inch-lcd-module-1.jpg" alt="Wyświetlacz LCD" height="200" width="200"> Wyświetlacz LCD
-<img src="https://botland.com.pl/64737-thickbox_default/modul-czytnika-kart-sd.jpg" alt="Czytnik kart SD" height="150" width="200">Czytnik kart SD <br>
-<img src="https://encrypted-tbn0.gstatic.com/images?q=tbn%3AANd9GcQrODIHC03dJQEg5tS9Idymq-e9rcGCxHMLznT6HVeXhJ5l8Ppxt1FAOoycvdq1aFbBsmcmbmc&usqp=CAc" alt="Moduł Wi-Fi" height="150" width="200"> Moduł Wi-Fi <br>
+<img src="https://botland.com.pl/64074-large_default/modul-czytnika-kart-microsd.jpg" alt="Czytnik kart SD" height="150" width="200">Czytnik kart microSD – MOD-08230 <br>
+<img src="https://c.allegroimg.com/s512/0643a1/d66a62e941c9ade1c25295e59ecc/Transceiver-DP83848-ETH-Board-10-100-Ethernet" alt="Moduł Wi-Fi" height="150" width="200"> Moduł Ethernet DP83848 – Waveshare 4141 <br>
 
  ### Wykorzystano: FatFs, lwIP
 
