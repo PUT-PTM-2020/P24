@@ -16,20 +16,21 @@
 
 #define UDP_SERVER_PORT		20000
 #define UDP_CLIENT_PORT		20000
-#define START_SEND_FILE		'\x01'
-#define NEXT_SEND_FILE 		'\x02'
-#define DOWNLOAD_FILE 		'\x03'
-#define GET_PATH_INFO 		'\x04'
-#define GET_FILE_INFO 		'\x05'
-#define CHANGE_DIRECTORY 	'\x06'
-#define DELETE_FILE			'\x07'
-#define DELETE_DIRECTORY	'\x08'
-#define GET_FILE			'\x09'
-#define CREATE_DIRECTORY 	'\b'
+#define START_SEND_FILE		1
+#define NEXT_SEND_FILE 		2
+#define DOWNLOAD_FILE 		3
+#define GET_PATH_INFO 		4
+#define GET_FILE_INFO 		5
+#define CHANGE_DIRECTORY 	6
+#define DELETE_FILE			7
+#define DELETE_DIRECTORY	8
+#define GET_FILE			9
+#define CREATE_DIRECTORY 	10
+#define END_SEND_FILE		11
 
-#define RESP_OK				'\x00'
-#define RESP_ERR			'\x01'
-#define RESP_MORE			'\x02'
+#define RESP_OK				0
+#define RESP_ERR			1
+#define RESP_MORE			2
 
 char msg_buffer[1024];
 char ans[1];
@@ -45,10 +46,14 @@ uint16_t fname_size=0;
 static FILINFO file_info;
 char slashsign[1]= {'/'};
 char divider[1] = {'*'};
+uint16_t header_size = 5;
+uint16_t msg_size = 0;
+int control_val = 0;
 
 void udp_server_receive_callback(void *arg, struct udp_pcb *upcb, struct pbuf *p,
 		const ip_addr_t *addr, u16_t port);
 u16_t copy_to_pbuf(const struct pbuf *buf, void *dataptr, u16_t len, u16_t offset);
+uint16_t find_end_of_new_msg();
 void process_data();
 uint16_t find_end_of_msg();
 void get_path_info();
@@ -86,16 +91,25 @@ void udp_server_init(void)
 
 void udp_server_receive_callback(void *arg, struct udp_pcb *upcb, struct pbuf *p, const ip_addr_t *addr, u16_t port)
 {
-  pbuf_copy_partial(p, msg_buffer, 1024, 0);
+  pbuf_copy_partial(p, msg_buffer, p->len, 0);
   process_data();
-  p->tot_len = 1024;
-  p->len = 1024;
-  uint16_t x = copy_to_pbuf(p, msg_buffer, 1024, 0);
+  msg_size = find_end_of_new_msg();
+  p->tot_len = msg_size;
+  p->len = msg_size;
+  uint16_t x = copy_to_pbuf(p, msg_buffer, msg_size, 0);
   memset(msg_buffer,0,sizeof(msg_buffer));
   memset(file_buffer, 0, sizeof(file_buffer));
   udp_sendto(upcb, p, addr, UDP_CLIENT_PORT);
   pbuf_free(p);
 
+}
+uint16_t find_end_of_new_msg()
+{
+	for (int i=header_size;i<1024;i++)
+	{
+		if (msg_buffer[i] == '\0') return i;
+	}
+	return -1;
 }
 u16_t copy_to_pbuf(const struct pbuf *buf, void *dataptr, u16_t len, u16_t offset)
 {
@@ -158,6 +172,10 @@ void process_data()
 	{
 		parse_path_and_create_directory();
 	}
+	else if(operation[0] - END_SEND_FILE == 0)
+	{
+		clear_control_val();
+	}
 	else
 	{
 		memset(msg_buffer, 0, sizeof(msg_buffer));
@@ -166,11 +184,19 @@ void process_data()
 	}
 }
 
+void clear_control_val()
+{
+	control_val = 0;
+	memset(msg_buffer, 0, sizeof(msg_buffer));
+	memcpy(msg_buffer, operation, 1);
+	memcpy(msg_buffer+1, RESP_OK, 1);
+}
+
 uint16_t find_end_of_msg()
 {
-	for (int i=3;i<1024;i++)
+	for (int i=header_size;i<1024;i++)
 	{
-		if (msg_buffer[i] == '\0' || msg_buffer[i] == 42) return i - 3;
+		if (msg_buffer[i] == '\0' || msg_buffer[i] == 42) return i - header_size;
 	}
 	return -1;
 }
@@ -178,7 +204,7 @@ void get_path_info()
 {
 	uint16_t len;
 	uint16_t it = find_end_of_msg();
-	memcpy(file_buffer, msg_buffer+3, it);
+	memcpy(file_buffer, msg_buffer+header_size, it);
 	if (it < 1)
 	{
 		//error
@@ -191,7 +217,7 @@ void get_path_info()
 
 		memcpy(msg_buffer+1, RESP_OK, 1);
 		memcpy(msg_buffer+2, id, 1);
-		memcpy(msg_buffer+3, file_buffer, len);
+		memcpy(msg_buffer+header_size, file_buffer, len);
 	}
 }
 
@@ -199,7 +225,7 @@ void check_if_dir_exists()
 {
 	uint16_t len;
 	uint16_t it = find_end_of_msg();
-	memcpy(file_buffer, msg_buffer+3, it);
+	memcpy(file_buffer, msg_buffer+header_size, it);
 	if (it < 1)
 		{
 			//error
@@ -217,10 +243,27 @@ void save_to_file(uint16_t append)
 	uint16_t it = find_end_of_msg();
 	char filename[100];
 	memset(filename,0, sizeof(filename));
-	memcpy(filename, msg_buffer + 3, it);
-	memcpy(file_buffer, msg_buffer + 3 + it + 1, 1024 - it - 3);
+	memcpy(filename, msg_buffer + header_size, it);
+	memcpy(file_buffer, msg_buffer + header_size + it + 1, 1024 - it - header_size);
+	char packet_counter[2] = {'\0','\0'};
+	memcpy(packet_counter, msg_buffer + 3, 2);
+	int p_counter = 0;
+	p_counter = packet_counter[0]*256+packet_counter[1];
 	memset(msg_buffer, 0, sizeof(msg_buffer));
-	FRESULT fres = write_file(filename, append);
+	FRESULT fres;
+	if(p_counter == control_val + 1)
+	{
+		fres = write_file(filename, append);
+		control_val++;
+	}
+	else if (p_counter == control_val)
+	{
+		fres = FR_OK;
+	}
+	else
+	{
+		fres = 1;
+	}
 	memcpy(msg_buffer, operation, 1);
 	if (fres == FR_OK)
 	{
@@ -230,15 +273,18 @@ void save_to_file(uint16_t append)
 	else
 	{
 		memcpy(msg_buffer+1, RESP_ERR, 1);
+		parse_path_and_delete_file();
+		control_val = 0;
 	}
 	memcpy(msg_buffer+2, id, 1);
+	memcpy(msg_buffer+3, packet_counter, 2);
 }
 void parse_path_and_delete_file()
 {
 	uint16_t it = find_end_of_msg();
 	char filename[100];
 	memset(filename, 0, sizeof(filename));
-	memcpy(filename, msg_buffer + 3, it);
+	memcpy(filename, msg_buffer + header_size, it);
 	memset(msg_buffer, 0, sizeof(msg_buffer));
 	FRESULT fres = delete_file(filename);
 	memcpy(msg_buffer, operation, 1);
@@ -258,7 +304,7 @@ void parse_path_and_delete_directory()
 	uint16_t it = find_end_of_msg();
 	char filename[100];
 	memset(filename, 0, sizeof(filename));
-	memcpy(filename, msg_buffer + 3, it);
+	memcpy(filename, msg_buffer + header_size, it);
 	memset(msg_buffer, 0, sizeof(msg_buffer));
 	FRESULT fres = delete_file(filename);
 	memcpy(msg_buffer, operation, 1);
@@ -279,18 +325,19 @@ void read_and_send_file()
 	uint16_t it = find_end_of_msg();
 	char filename[100];
 	memset(filename,0, sizeof(filename));
-	memcpy(filename, msg_buffer + 3, it);
-	char packet_counter[1] = {'\0'};
-	memcpy(packet_counter, msg_buffer + it + 4, 1);
+	memcpy(filename, msg_buffer + header_size, it);
+	char packet_counter[2] = {'\0','\0'};
+	memcpy(packet_counter, msg_buffer + 3, 2);
 	int p_counter = 0;
-	p_counter = packet_counter[0];
+	p_counter = packet_counter[0]*256+packet_counter[1];
 	memset(msg_buffer, 0, sizeof(msg_buffer));
 	fres = read_file(filename, p_counter);
+	memcpy(msg_buffer, operation, 1);
 	if (fres == FR_OK)
 		{
 		if(bytes_read == 512)
 		{
-			memcpy(msg_buffer+1, RESP_OK, 1);
+			memcpy(msg_buffer+1, RESP_MORE, 1);
 		}
 		else if(bytes_read < 512)
 		{
@@ -301,8 +348,9 @@ void read_and_send_file()
 		{
 			memcpy(msg_buffer+1, RESP_ERR, 1);
 		}
+
 		memcpy(msg_buffer+2, id, 1);
-		memcpy(msg_buffer+3, file_buffer, 512);
+		memcpy(msg_buffer+header_size, file_buffer, bytes_read);
 		memset(file_buffer, 0, sizeof(file_buffer));
 }
 
@@ -311,7 +359,7 @@ void parse_path_and_create_directory()
 	uint16_t it = find_end_of_msg();
 		char dirname[100];
 		memset(dirname, 0, sizeof(dirname));
-		memcpy(dirname, msg_buffer + 3, it);
+		memcpy(dirname, msg_buffer + header_size, it);
 		memset(msg_buffer, 0, sizeof(msg_buffer));
 		FRESULT fres = create_directory(dirname);
 		memcpy(msg_buffer, operation, 1);
