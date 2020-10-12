@@ -16,21 +16,27 @@
 
 #define UDP_SERVER_PORT		20000
 #define UDP_CLIENT_PORT		20000
-#define START_SEND_FILE		1
-#define NEXT_SEND_FILE 		2
-#define DOWNLOAD_FILE 		3
-#define GET_PATH_INFO 		4
-#define GET_FILE_INFO 		5
-#define CHANGE_DIRECTORY 	6
-#define DELETE_FILE			7
-#define DELETE_DIRECTORY	8
-#define GET_FILE			9
-#define CREATE_DIRECTORY 	10
-#define END_SEND_FILE		11
+#define START_SEND_FILE		'\x01'
+#define NEXT_SEND_FILE 		'\x02'
+#define DOWNLOAD_FILE 		'\x03'
+#define GET_PATH_INFO 		'\x04'
+#define GET_FILE_INFO 		'\x05'
+#define CHANGE_DIRECTORY 	'\x06'
+#define DELETE_FILE			'\x07'
+#define DELETE_DIRECTORY	'\x08'
+#define GET_FILE			'\x09'
+#define CREATE_DIRECTORY 	'\x0a'
+#define END_SEND_FILE		'\x0b'
+#define LOGIN 				'\x0c'
+#define LOGOUT				'\x0d'
+#define PUBLIC				'\x0e'
 
-#define RESP_OK				0
-#define RESP_ERR			1
-#define RESP_MORE			2
+#define RESP_OK				'\x00'
+#define RESP_ERR			'\x01'
+#define RESP_MORE			'\x02'
+#define RESP_AUTH_ERR		'\x03'
+#define RESP_NO_PATH		'\x04'
+#define RESP_NOT_LOGGED		'\x05'
 
 char msg_buffer[1024];
 char ans[1];
@@ -46,9 +52,14 @@ uint16_t fname_size=0;
 static FILINFO file_info;
 char slashsign[1]= {'/'};
 char divider[1] = {'*'};
-uint16_t header_size = 5;
+uint16_t header_size = 6;
+uint16_t header_with_usrname = 12;
 uint16_t msg_size = 0;
 int control_val = 0;
+uint8_t isLogged[256];
+char packet_control[256][3];
+
+
 
 void udp_server_receive_callback(void *arg, struct udp_pcb *upcb, struct pbuf *p,
 		const ip_addr_t *addr, u16_t port);
@@ -62,6 +73,9 @@ void parse_path_and_delete_file();
 void parse_path_and_delete_directory();
 void read_and_send_file();
 void parse_path_and_create_directory();
+uint16_t logout();
+uint16_t login_public();
+
 
 uint16_t read_file(char* filename, int p_counter);
 uint16_t write_file(char* filename, uint16_t append);
@@ -71,10 +85,12 @@ uint16_t check_existance(char * path);
 uint16_t delete_file(char * path);
 uint16_t delete_directory(char * path);
 uint16_t create_directory(char * path);
-
-
+uint16_t login_user();
+uint16_t check_if_logged();
 void udp_server_init(void)
 {
+	memset(isLogged,0, sizeof(isLogged));
+	memset(packet_control, 0, sizeof(packet_control));
    struct udp_pcb *upcb;
    err_t err;
    upcb = udp_new();
@@ -99,13 +115,15 @@ void udp_server_receive_callback(void *arg, struct udp_pcb *upcb, struct pbuf *p
   uint16_t x = copy_to_pbuf(p, msg_buffer, msg_size, 0);
   memset(msg_buffer,0,sizeof(msg_buffer));
   memset(file_buffer, 0, sizeof(file_buffer));
+  memset(operation, 0, 1);
+  memset(id, 0, 1);
   udp_sendto(upcb, p, addr, UDP_CLIENT_PORT);
   pbuf_free(p);
 
 }
 uint16_t find_end_of_new_msg()
 {
-	for (int i=header_size;i<1024;i++)
+	for (int i=header_with_usrname;i<1024;i++)
 	{
 		if (msg_buffer[i] == '\0') return i;
 	}
@@ -133,55 +151,185 @@ u16_t copy_to_pbuf(const struct pbuf *buf, void *dataptr, u16_t len, u16_t offse
       left = (u16_t)(left + buf_copy_len);
       len = (u16_t)(len - buf_copy_len);
       offset = 0;
+
     }
   }
   return copied_total;
 }
-void process_data()
+uint16_t login_user()
 {
-	memcpy(operation, msg_buffer,1);
-	if (operation[0] - GET_FILE_INFO == 0)
+	char cli_username[] = "******";
+	char cli_password[] = "********";
+	memcpy(cli_username, msg_buffer+header_size, 6);
+	memcpy(cli_password, msg_buffer+header_with_usrname, 8);
+	memset(msg_buffer, 0, 1024);
+	FRESULT fr;
+	int pointer=0;
+	uint16_t read = 17;
+	fr = f_mount(&FatFs, "", 0);
+	fr = f_open(&file, "user database.txt", FA_READ);
+	char data_buffer[17];
+	char data_username[] = "******";
+	char data_password[] = "********";
+	while(read==17 || pointer<255)
 	{
-		get_path_info();
+		fr = f_read(&file, data_buffer, 17, &bytes_read);
+		if (fr) {
+			prepare_response(operation, RESP_ERR, id, 0, 0);
+				return -1;
+			};
+		memcpy(data_username, data_buffer+1, 6);
+		memcpy(data_password, data_buffer+7, 8);
+		if(strcmp(cli_username, data_username) == 0 && strcmp(cli_password, data_password) == 0)
+		{
+			memcpy(id, data_buffer, 1);
+			prepare_response(operation, RESP_OK, id, 0, 0);
+			isLogged[(int)id[0]] = 2;
+			break;
+		}
+		pointer++;
 	}
-	else if (operation[0] - CHANGE_DIRECTORY == 0)
+	if (fr) {
+		prepare_response(operation[0], RESP_AUTH_ERR, id, 0, 0);
+	};
+	fr = f_close(&file);
+	return fr;
+
+}
+uint16_t check_if_logged()
+{
+	if(isLogged[(int)id[0]] == 1)
 	{
-		check_if_dir_exists();
+		return 1;
 	}
-	else if (operation[0] - START_SEND_FILE == 0)
+	else if(isLogged[(int)id[0]] == 2)
 	{
-		save_to_file(0);
-	}
-	else if(operation[0] - NEXT_SEND_FILE == 0)
-	{
-		save_to_file(1);
-	}
-	else if(operation[0] - DELETE_FILE == 0)
-	{
-		parse_path_and_delete_file();
-	}
-	else if(operation[0] - DELETE_DIRECTORY == 0)
-	{
-		parse_path_and_delete_directory();
-	}
-	else if(operation[0] - GET_FILE == 0)
-	{
-		read_and_send_file();
-	}
-	else if(operation[0] - CREATE_DIRECTORY == 0)
-	{
-		parse_path_and_create_directory();
-	}
-	else if(operation[0] - END_SEND_FILE == 0)
-	{
-		clear_control_val();
+		return 2;
 	}
 	else
 	{
-		memset(msg_buffer, 0, sizeof(msg_buffer));
-		memcpy(msg_buffer, operation, 1);
-		memcpy(msg_buffer+1, RESP_ERR, 1);
+		prepare_response(operation, RESP_NOT_LOGGED, id, 0,0 );
+		return 0;
 	}
+
+}
+void process_data()
+{
+	memcpy(operation, msg_buffer,1);
+	memcpy(id, msg_buffer+2, 1);
+	if (operation[0] - LOGIN == 0)
+	{
+		login_user();
+		return;
+	}
+	else if(operation[0] - PUBLIC == 0)
+	{
+		login_public();
+		return;
+	}
+	uint16_t isLogged = check_if_logged();
+	if(isLogged > 0)
+	{
+
+		if (operation[0] - GET_FILE_INFO == 0)
+		{
+			get_path_info();
+		}
+		else if (operation[0] - CHANGE_DIRECTORY == 0)
+		{
+			check_if_dir_exists();
+		}
+		else if (operation[0] - START_SEND_FILE == 0 && isLogged>1)
+		{
+			save_to_file(0);
+		}
+		else if(operation[0] - NEXT_SEND_FILE == 0 && isLogged>1)
+		{
+			save_to_file(1);
+		}
+		else if(operation[0] - DELETE_FILE == 0 && isLogged>1)
+		{
+			parse_path_and_delete_file();
+		}
+		else if(operation[0] - DELETE_DIRECTORY == 0 && isLogged>1)
+		{
+			parse_path_and_delete_directory();
+		}
+		else if(operation[0] - GET_FILE == 0)
+		{
+			read_and_send_file();
+		}
+		else if(operation[0] - CREATE_DIRECTORY == 0 && isLogged>1)
+		{
+			parse_path_and_create_directory();
+		}
+		else if(operation[0] - END_SEND_FILE == 0 && isLogged>1)
+		{
+			clear_control_val();
+		}
+		else if(operation[0] - LOGOUT == 0)
+		{
+			logout();
+		}
+
+		else
+		{
+			prepare_response(operation, RESP_AUTH_ERR, id, 0, 0);
+		}
+	}
+	else
+	{
+		//ur not logged in!
+	}
+}
+uint16_t login_public()
+{
+	char cli_username[] = "public";
+	char empty_field[] = "******";
+	memset(msg_buffer, 0, 1024);
+	FRESULT fr;
+	int pointer=0;
+	uint16_t read = 17;
+	fr = f_mount(&FatFs, "", 0);
+	fr = f_open(&file, "user database.txt", FA_READ | FA_WRITE);
+	char data_buffer[17];
+	char data_username[] = "******";
+	char data_password[] = "********";
+	fr = f_read(&file, data_buffer, 17, &bytes_read);
+	pointer++;
+	while(read==17)
+	{
+		fr = f_read(&file, data_buffer, 17, &bytes_read);
+		if (fr) {
+			prepare_response(operation, RESP_ERR, id, 0, 0);
+				return -1;
+			};
+		memcpy(data_username, data_buffer+1, 6);
+		memcpy(data_password, data_buffer+7, 8);
+		if(strcmp(empty_field, data_username) == 0)
+		{
+			f_lseek(&file, f_tell(&file) - 17);
+			id[0] = pointer;
+			f_write(&file, id,1,0);
+			f_write(&file, cli_username, 6,0);
+			prepare_response(operation, RESP_OK, id, 0, 0);
+			isLogged[(int)id[0]] = 1;
+			break;
+		}
+		pointer++;
+	}
+	if (fr) {
+		prepare_response(operation[0], RESP_AUTH_ERR, id, 0, 0);
+	};
+	fr = f_close(&file);
+	return fr;
+
+}
+uint16_t logout()
+{
+	isLogged[(int)id[0]] = 0;
+	prepare_response(operation, RESP_OK, id, 0, 0);
+	return 0;
 }
 
 void clear_control_val()
@@ -194,17 +342,24 @@ void clear_control_val()
 
 uint16_t find_end_of_msg()
 {
-	for (int i=header_size;i<1024;i++)
+	for (int i=header_with_usrname;i<1024;i++)
 	{
-		if (msg_buffer[i] == '\0' || msg_buffer[i] == 42) return i - header_size;
+		if (msg_buffer[i] == '\0' || msg_buffer[i] == 42) return i - header_with_usrname;
 	}
 	return -1;
+}
+void prepare_response(char* op, char resp,char* id, char* file_buffer, uint16_t len)
+{
+	memcpy(msg_buffer, op, 1);
+	memset(msg_buffer+1, resp, 1);
+	memcpy(msg_buffer+2, id, 1);
+	if(len !=0)	memcpy(msg_buffer+header_size, file_buffer, len);
 }
 void get_path_info()
 {
 	uint16_t len;
 	uint16_t it = find_end_of_msg();
-	memcpy(file_buffer, msg_buffer+header_size, it);
+	memcpy(file_buffer, msg_buffer+header_with_usrname, it);
 	if (it < 1)
 	{
 		//error
@@ -213,11 +368,7 @@ void get_path_info()
 	memset(msg_buffer,0,sizeof(msg_buffer));
 	if(len > 0)
 	{
-		memcpy(msg_buffer, operation, 1);
-
-		memcpy(msg_buffer+1, RESP_OK, 1);
-		memcpy(msg_buffer+2, id, 1);
-		memcpy(msg_buffer+header_size, file_buffer, len);
+		prepare_response(operation, RESP_OK, id, file_buffer,len);
 	}
 }
 
@@ -225,17 +376,25 @@ void check_if_dir_exists()
 {
 	uint16_t len;
 	uint16_t it = find_end_of_msg();
-	memcpy(file_buffer, msg_buffer+header_size, it);
+	memcpy(file_buffer, msg_buffer+header_with_usrname, it);
 	if (it < 1)
 		{
 			//error
 		}
 	FRESULT fr = f_chdir(file_buffer);
 	memset(msg_buffer,0,sizeof(msg_buffer));
-	memcpy(msg_buffer, operation, 1);
-	if(fr == FR_OK) memcpy(msg_buffer+1, RESP_OK, 1);
-	else memcpy(msg_buffer+1, RESP_ERR, 1);
-	memcpy(msg_buffer+3, id, 1);
+	if(fr == FR_OK)
+	{
+		prepare_response(operation, RESP_OK, id, 0, 0);
+	}
+	else if(fr == FR_NO_PATH)
+	{
+		prepare_response(operation, RESP_NO_PATH, id, 0,0);
+	}
+	else
+	{
+		prepare_response(operation, RESP_ERR, id, 0, 0);
+	}
 }
 
 void save_to_file(uint16_t append)
@@ -243,12 +402,12 @@ void save_to_file(uint16_t append)
 	uint16_t it = find_end_of_msg();
 	char filename[100];
 	memset(filename,0, sizeof(filename));
-	memcpy(filename, msg_buffer + header_size, it);
-	memcpy(file_buffer, msg_buffer + header_size + it + 1, 1024 - it - header_size);
-	char packet_counter[2] = {'\0','\0'};
-	memcpy(packet_counter, msg_buffer + 3, 2);
+	memcpy(filename, msg_buffer + header_with_usrname, it);
+	memcpy(file_buffer, msg_buffer + header_with_usrname + it + 1, 1024 - it - header_with_usrname);
+	char packet_counter[3] = {'\0','\0', '\0'};
+	memcpy(packet_counter, msg_buffer + 3, 3);
 	int p_counter = 0;
-	p_counter = packet_counter[0]*256+packet_counter[1];
+	p_counter = packet_counter[0]*256*256+packet_counter[1]*256+packet_counter[2];
 	memset(msg_buffer, 0, sizeof(msg_buffer));
 	FRESULT fres;
 	if(p_counter == control_val + 1)
@@ -284,7 +443,7 @@ void parse_path_and_delete_file()
 	uint16_t it = find_end_of_msg();
 	char filename[100];
 	memset(filename, 0, sizeof(filename));
-	memcpy(filename, msg_buffer + header_size, it);
+	memcpy(filename, msg_buffer + header_with_usrname, it);
 	memset(msg_buffer, 0, sizeof(msg_buffer));
 	FRESULT fres = delete_file(filename);
 	memcpy(msg_buffer, operation, 1);
@@ -304,7 +463,7 @@ void parse_path_and_delete_directory()
 	uint16_t it = find_end_of_msg();
 	char filename[100];
 	memset(filename, 0, sizeof(filename));
-	memcpy(filename, msg_buffer + header_size, it);
+	memcpy(filename, msg_buffer + header_with_usrname, it);
 	memset(msg_buffer, 0, sizeof(msg_buffer));
 	FRESULT fres = delete_file(filename);
 	memcpy(msg_buffer, operation, 1);
@@ -325,32 +484,28 @@ void read_and_send_file()
 	uint16_t it = find_end_of_msg();
 	char filename[100];
 	memset(filename,0, sizeof(filename));
-	memcpy(filename, msg_buffer + header_size, it);
-	char packet_counter[2] = {'\0','\0'};
-	memcpy(packet_counter, msg_buffer + 3, 2);
+	memcpy(filename, msg_buffer + header_with_usrname, it);
+	char packet_counter[3] = {'\0','\0','\0'};
+	memcpy(packet_counter, msg_buffer + 3, 3);
 	int p_counter = 0;
-	p_counter = packet_counter[0]*256+packet_counter[1];
+	p_counter = packet_counter[0]*256*256+packet_counter[1]*256+packet_counter[2];
 	memset(msg_buffer, 0, sizeof(msg_buffer));
 	fres = read_file(filename, p_counter);
-	memcpy(msg_buffer, operation, 1);
 	if (fres == FR_OK)
 		{
 		if(bytes_read == 512)
 		{
-			memcpy(msg_buffer+1, RESP_MORE, 1);
+			prepare_response(operation, RESP_MORE, id, file_buffer, bytes_read);
 		}
 		else if(bytes_read < 512)
 		{
-			memcpy(msg_buffer+1, RESP_OK, 1);
+			prepare_response(operation, RESP_OK, id, file_buffer, bytes_read);
 		}
 		}
 		else
 		{
-			memcpy(msg_buffer+1, RESP_ERR, 1);
+			prepare_response(operation, RESP_ERR, id, file_buffer, bytes_read);
 		}
-
-		memcpy(msg_buffer+2, id, 1);
-		memcpy(msg_buffer+header_size, file_buffer, bytes_read);
 		memset(file_buffer, 0, sizeof(file_buffer));
 }
 
@@ -359,7 +514,7 @@ void parse_path_and_create_directory()
 	uint16_t it = find_end_of_msg();
 		char dirname[100];
 		memset(dirname, 0, sizeof(dirname));
-		memcpy(dirname, msg_buffer + header_size, it);
+		memcpy(dirname, msg_buffer + header_with_usrname, it);
 		memset(msg_buffer, 0, sizeof(msg_buffer));
 		FRESULT fres = create_directory(dirname);
 		memcpy(msg_buffer, operation, 1);
@@ -383,10 +538,9 @@ uint16_t read_file(char* filename, int p_counter)
 	fr = f_mount(&FatFs, "", 0);
 	fr = f_open(&file, filename, FA_READ);
 	if (fr) return (int)fr;
-	for (int i=0; i<p_counter; i++)
-	{
-		fr = f_read(&file, file_buffer,512,&bytes_read);
-	}
+	fr = f_lseek(&file, p_counter*512);
+	if (fr) return (int)fr;
+	fr = f_read(&file, file_buffer,512,&bytes_read);
 	fr = f_close(&file);
 	return fr;
 }
@@ -504,4 +658,12 @@ uint16_t create_directory(char * path)
 		fr = f_mkdir(path);
 	}
 	return fr;
+}
+
+
+uint16_t login()
+{
+	char username[6];
+	char password[6];
+	return 0;
 }
