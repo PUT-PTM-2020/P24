@@ -1,0 +1,11 @@
+func.c:50:6:lcd7735_ini	8	static
+func.c:76:6:lcd7735_sendCmd	16	static
+func.c:84:6:lcd7735_sendData	16	static
+func.c:92:6:lcd7735_at	24	static
+func.c:111:6:lcd7735_fillrect	32	static
+func.c:135:6:lcd7735_putpix	16	static
+func.c:148:6:lcd7735_line	48	static
+func.c:193:6:lcd7735_rect	32	static
+func.c:202:6:LCD7735_dec	32	static
+func.c:223:6:lcd7735_putchar	32	static
+func.c:279:6:lcd7735_putstr	32	static
