@@ -33,6 +33,8 @@
 #define ADD_USER			'\x0f'
 #define DEL_USER			'\x10'
 #define SET_PRIVILEGES 		'\x11'
+#define GET_LOGGED			'\x12'
+#define FORCE_LOGOUT		'\x13'
 
 #define RESP_OK				'\x00'
 #define RESP_ERR			'\x01'
@@ -70,6 +72,8 @@ bool user_privileges[256][3];  // [][0] = get, [][1] = send, [][2] = delete
 char default_privileges[] = "\x6e";
 char init_name[] = "******";
 char admin_name[] = "admin0";
+uint32_t user_count;
+uint32_t byte_counter;
 
 void udp_server_receive_callback(void *arg, struct udp_pcb *upcb, struct pbuf *p,
 		const ip_addr_t *addr, u16_t port);
@@ -87,7 +91,9 @@ uint16_t logout();
 uint16_t login_public();
 void add_user();
 void del_user();
-
+uint32_t count_users();
+void get_logged();
+void force_logout();
 
 uint16_t read_file(char* filename, int p_counter);
 uint16_t write_file(char* filename, uint16_t append);
@@ -103,6 +109,23 @@ FRESULT delete_node (TCHAR* path, UINT sz_buff, FILINFO* fno);
 void set_privileges();
 void udp_server_init(void)
 {
+	LCD_SCAN_DIR Lcd_ScanDir = SCAN_DIR_DFT;//SCAN_DIR_DFT = D2U_L2R
+	LCD_Init( Lcd_ScanDir );
+	user_count=0;
+  	LCD_DisplayString(5, 20,"USERS:", &Font12, BLACK, GREEN);
+  	LCD_DisplayString(70,20, "0", &Font12, BLACK, GREEN);
+  	byte_counter = 0;
+  	//FATFS *fs;
+  	//DWORD fre_clust, fre_sect, tot_sect;
+  	//FRESULT res;
+  	//res = f_mount(fs, "0:", 0);
+  	//char fn[] = "user database.txt";
+  	//res = read_file(fn, 0);
+  	//res = f_getfree("0:", &fre_clust, &FatFs);
+  	//tot_sect = (fs->n_fatent - 2) * fs->csize;
+  	//fre_sect = fre_clust * fs->csize;
+  	//LCD_DisplayString(5, 20, fre_sect, &Font12, BLACK, GREEN);
+  	Driver_Delay_ms(1000);
 	memset(isLogged,0, sizeof(isLogged));
 	memset(packet_control, 0, sizeof(packet_control));
    struct udp_pcb *upcb;
@@ -111,7 +134,7 @@ void udp_server_init(void)
    user_privileges[0][1] = true;
    user_privileges[0][2] = true;
    user_privileges[255][0] = true;
-   isLogged[255] = false;
+   isLogged[255] = true;
    upcb = udp_new();
 
    if (upcb)
@@ -129,6 +152,8 @@ void udp_server_receive_callback(void *arg, struct udp_pcb *upcb, struct pbuf *p
   pbuf_copy_partial(p, msg_buffer, p->len, 0);
   process_data();
   msg_size = find_end_of_new_msg();
+  byte_counter += p->tot_len;
+  byte_counter += msg_size;
   p->tot_len = msg_size;
   p->len = msg_size;
   uint16_t x = copy_to_pbuf(p, msg_buffer, msg_size, 0);
@@ -202,28 +227,36 @@ uint16_t login_user()
 			};
 		memcpy(data_username, data_buffer+1, 6);
 		memcpy(data_password, data_buffer+7, 8);
-		if(strcmp(cli_username, data_username) == 0 && strcmp(cli_password, data_password) == 0)
+		if(strcmp(cli_username, data_username) == 0)
 		{
+			if(strcmp(cli_password, data_password) != 0)
+			{
+				prepare_response(operation, RESP_AUTH_ERR, id, 0, 0);
+				fr = f_close(&file);
+				return;
+			}
 			memcpy(id, data_buffer, 1);
 			prepare_response(operation, RESP_OK, id, 0, 0);
 			memcpy(privileges, data_buffer+15, 1);
 			uint8_t privils = (uint8_t)privileges[0];
-			uint8_t canget = privils - 100 > 0 ? 1 : 0;
+			uint8_t canget = privils - 100 >= 0 ? 1 : 0;
 			privils = privils -(100*canget);
-			uint8_t cansend = privils - 10 > 0 ? 1 : 0;
+			uint8_t cansend = privils - 10 >= 0 ? 1 : 0;
 			privils = privils - (10*cansend);
 			uint8_t candel = privils - 1 == 0 ? 1: 0;
 			user_privileges[(int)id[0]][0] = canget ? true : false;
 			user_privileges[(int)id[0]][1] = cansend ? true : false;
 			user_privileges[(int)id[0]][2] = candel ? true : false;
-			isLogged[(int)id[0]] = 1;
+			isLogged[(int)id[0]] = true;
+			user_count = count_users();
+		  	LCD_DisplayNum(70,20, user_count,&Font12,BLACK,GREEN);
 			break;
 		}
 		pointer++;
 	}
 
 	if (fr || pointer>=255) {
-		prepare_response(operation[0], RESP_AUTH_ERR, id, 0, 0);
+		prepare_response(operation, RESP_NOT_FOUND, id, 0, 0);
 	};
 	fr = f_close(&file);
 	return fr;
@@ -241,6 +274,23 @@ uint16_t check_if_logged()
 		return 0;
 	}
 
+}
+uint32_t count_users()
+{
+	uint32_t counter=0;
+	for(int i=1; i<255;i++)
+	{
+		if(isLogged[i]==true) counter++;
+	}
+	return counter;
+}
+void force_logout()
+{
+	char idx[] = "*";
+	memcpy(idx, msg_buffer+header_with_usrname, 1);
+	isLogged[(int)idx[0]] = false;
+	memset(msg_buffer, 0, sizeof(msg_buffer));
+	prepare_response(operation, RESP_OK, id, 0, 0);
 }
 void process_data()
 {
@@ -322,6 +372,14 @@ void process_data()
 		{
 			logout();
 		}
+		else if(operation[0] - GET_LOGGED == 0 && strcmp(init_name, admin_name) == 0)
+		{
+			get_logged();
+		}
+		else if(operation[0] - FORCE_LOGOUT == 0 && strcmp(init_name, admin_name) == 0)
+		{
+			force_logout();
+		}
 		else
 		{
 			prepare_response(operation, RESP_AUTH_ERR, id, 0, 0);
@@ -331,6 +389,23 @@ void process_data()
 	{
 		prepare_response(operation, RESP_AUTH_ERR, id, 0, 0);
 	}
+}
+
+
+void get_logged()
+{
+	memset(file_buffer, 0, sizeof(file_buffer));
+	memset(msg_buffer, 0, sizeof(msg_buffer));
+	int counter = 0;
+	for(int i=0;i<255;i++)
+	{
+		if (isLogged[i] == true)
+		{
+			file_buffer[counter] = i;
+			counter++;
+		}
+	}
+	prepare_response(operation, RESP_OK, id, file_buffer, counter);
 }
 void set_privileges()
 {
@@ -370,19 +445,20 @@ void set_privileges()
 			if(isLogged[++pointer])
 			{
 				uint8_t privils = (uint8_t)privs[0];
-				uint8_t canget = privils - 100 > 0 ? 1 : 0;
+				uint8_t canget = privils - 100 >= 0 ? 1 : 0;
 				privils = privils -(100*canget);
-				uint8_t cansend = privils - 10 > 0 ? 1 : 0;
+				uint8_t cansend = privils - 10 >= 0 ? 1 : 0;
 				privils = privils - (10*cansend);
 				uint8_t candel = privils - 1 == 0 ? 1: 0;
-				user_privileges[(int)id[0]][0] = canget ? true : false;
-				user_privileges[(int)id[0]][1] = cansend ? true : false;
-				user_privileges[(int)id[0]][2] = candel ? true : false;
+				user_privileges[pointer][0] = canget ? true : false;
+				user_privileges[pointer][1] = cansend ? true : false;
+				user_privileges[pointer][2] = candel ? true : false;
 			}
 			prepare_response(operation, RESP_OK, id, 0, 0);
 			f_close(&file);
 			return;
 		}
+		pointer++;
 	}
 	prepare_response(operation, RESP_NOT_FOUND, id, 0 ,0);
 }
@@ -530,7 +606,13 @@ uint16_t exit_public()
 }
 uint16_t logout()
 {
-	isLogged[(int)id[0]] = 0;
+
+	isLogged[(int)id[0]] = false;
+	user_count = count_users();
+	LCD_DisplayNum(70,20, user_count,&Font12,BLACK,GREEN);
+	if(user_count == 0)
+		LCD_DisplayString(70,20, "0",&Font12,BLACK,GREEN);
+
 	prepare_response(operation, RESP_OK, id, 0, 0);
 	return 0;
 }
@@ -569,10 +651,7 @@ void get_path_info()
 	}
 	len = scan_dir(file_buffer);
 	memset(msg_buffer,0,sizeof(msg_buffer));
-	if(len > 0)
-	{
-		prepare_response(operation, RESP_OK, id, file_buffer,len);
-	}
+	prepare_response(operation, RESP_OK, id, file_buffer,len);
 }
 
 void check_if_dir_exists()
@@ -805,7 +884,7 @@ uint16_t scan_dir(char* path)
     uint16_t fname_size = 0;
 
 
-    fr = f_mount(&FatFs, "", 0);
+    fr = f_mount(&FatFs, "0:", 0);
     if (fr != FR_OK) return 0;
     fr = f_opendir(&dir, path);
     if (fr == FR_OK) {
@@ -923,9 +1002,4 @@ uint16_t create_directory(char * path)
 }
 
 
-uint16_t login()
-{
-	char username[6];
-	char password[6];
-	return 0;
-}
+

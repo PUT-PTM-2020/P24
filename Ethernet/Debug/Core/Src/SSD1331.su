@@ -1,0 +1,17 @@
+SSD1331.c:97:13:ssd1331_write_byte	16	static
+SSD1331.c:112:6:ssd1331_draw_point	16	static
+SSD1331.c:132:6:ssd1331_draw_line	56	static
+SSD1331.c:158:6:ssd1331_draw_v_line	32	static
+SSD1331.c:171:6:ssd1331_draw_h_line	32	static
+SSD1331.c:184:6:ssd1331_draw_rect	24	static
+SSD1331.c:196:6:ssd1331_fill_rect	32	static
+SSD1331.c:211:6:ssd1331_draw_circle	40	static
+SSD1331.c:242:6:ssd1331_display_char	32	static
+SSD1331.c:273:17:_pow	24	static
+SSD1331.c:282:6:ssd1331_display_num	40	static
+SSD1331.c:315:6:ssd1331_display_string	32	static
+SSD1331.c:337:6:ssd1331_draw_1616char	32	static
+SSD1331.c:359:6:ssd1331_draw_3216char	32	static
+SSD1331.c:381:6:ssd1331_draw_bitmap	24	static
+SSD1331.c:394:6:ssd1331_clear_screen	24	static
+SSD1331.c:406:6:ssd1331_init	8	static
